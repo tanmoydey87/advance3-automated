@@ -1,0 +1,61 @@
+name: Deploy to EC2 (build & run Docker)
+
+on:
+  push:
+    branches:
+      - master   # trigger on push to main branch
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Debug secrets
+        run: |
+          echo "User: ${{ secrets.EC2_USERNAME }}"
+          echo "Host: ${{ secrets.EC2_HOST }}"
+          
+
+      # Set up SSH key from secret
+      # SSH key is used to authenticate the connection to EC2 instance
+      - name: Set up SSH key
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }} # SSH key for EC2 instance
+        run: |
+          echo "$SSH_KEY" > key.pem
+          chmod 400 key.pem 
+
+      # Copy repository files to initated EC2 instance
+      # SSH key is used to authenticate the connection to EC2 instance
+      - name: Copy files to EC2
+        run: | # 
+          scp -o StrictHostKeyChecking=no -i key.pem -r $(ls -A | grep -vE "^(\.git|\.github|key\.pem)$") ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:/home/${{ secrets.EC2_USERNAME }}/ml_app
+
+      # SSH to EC2, install Docker, build and run container
+      # SSH key is used to authenticate the connection to EC2 instance
+      - name: SSH to EC2 and deploy Docker
+        run: |
+          ssh -o StrictHostKeyChecking=no -i key.pem ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} \
+            "set -e; \
+            cd /home/ec2-user/ml_app || exit 0; \
+            sudo yum update -y; \
+            sudo dnf install -y docker; \
+            sudo service docker start; \
+            sudo docker rm -f linear-reg-api || true; \
+            sudo docker build -t linear-reg-api .; \
+            sudo docker ps --filter "publish=8000" -q | xargs -r sudo docker stop; \
+            sudo docker ps -a --filter "publish=8000" -q | xargs -r sudo docker rm; \
+            sudo docker run -d -p 8000:8000 --name linear-reg-api linear-reg-api; \
+            sudo docker ps"
+
+      - name: Show deployed app URL
+        run: |
+            echo "--------------------------------------------"
+            echo "FastAPI app is deployed successfully!"
+            echo "Access it in your browser at:"
+            echo "http://${{ secrets.EC2_HOST }}:8000/docs"
+            echo "--------------------------------------------"
